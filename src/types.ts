@@ -13,7 +13,7 @@ export interface SearcherStateV03 {
     blockNumber: string;
     market: string;
     venue: {
-      id: string;
+      id: string | number;
       name: string;
     };
   };
@@ -42,7 +42,16 @@ export interface SearcherStateV03 {
       ethereum: {
         venue: string;
         pair: string;
+        factory?: string;
         inputWeth: {
+          raw: string;
+          formatted: string;
+        };
+        grossWabitOut?: {
+          raw: string;
+          formatted: string;
+        };
+        transferBurn?: {
           raw: string;
           formatted: string;
         };
@@ -56,6 +65,10 @@ export interface SearcherStateV03 {
       rhc: {
         venue: string;
         inputWeth: {
+          raw: string;
+          formatted: string;
+        };
+        amountInUsed?: {
           raw: string;
           formatted: string;
         };
@@ -114,4 +127,63 @@ export interface MarketObservation {
   venueSignal: VenueSignal;
 
   executionStatus: "UNVERIFIED";
+}
+
+export interface EthereumVerification {
+  chainId: bigint;
+  blockNumber: number;
+
+  pair: string;
+  factory: string;
+  canonicalUniswapV2Factory: boolean;
+
+  token0: string;
+  token1: string;
+
+  wethReserveRaw: bigint;
+  wabitReserveRaw: bigint;
+
+  amountInWethRaw: bigint;
+  grossWabitOutRaw: bigint;
+  transferBurnRaw: bigint;
+  netWabitOutRaw: bigint;
+}
+
+export interface RhcVerification {
+  chainId: bigint;
+  blockNumber: number;
+
+  venue: bigint;
+  venueName: string;
+
+  amountInRequestedRaw: bigint;
+  amountInUsedRaw: bigint;
+  amountOutWabitRaw: bigint;
+  refundWethRaw: bigint;
+}
+
+export interface FeedLegVerification {
+  status: "PASS" | "FAIL";
+  feedRaw: bigint;
+  rpcRaw: bigint;
+  differenceBps: number;
+}
+
+export interface IndependentVerification {
+  status: "PASS" | "FAIL";
+
+  ethereum: EthereumVerification;
+  rhc: RhcVerification;
+
+  ethereumFeedMatch: FeedLegVerification;
+  rhcFeedMatch: FeedLegVerification;
+
+  toleranceBps: number;
+
+  executionBasis:
+    | "VERIFIED_MARKET_STATE"
+    | "UNVERIFIED_MARKET_STATE";
+
+  arbExecution:
+    | "NOT_YET_PROVEN";
 }

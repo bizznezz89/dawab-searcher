@@ -21,6 +21,18 @@ function numberFromEnv(
   return value;
 }
 
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+
+  if (!value) {
+    throw new Error(
+      `${name} is required for Phase 2 independent verification`,
+    );
+  }
+
+  return value;
+}
+
 export const config = Object.freeze({
   mode: process.env.MODE ?? "paper",
 
@@ -38,19 +50,51 @@ export const config = Object.freeze({
     5 * 60 * 1000,
   ),
 
-  // Phase 1 does not execute trades.
+  verificationIntervalMs: numberFromEnv(
+    "VERIFY_INTERVAL_MS",
+    60_000,
+  ),
+
+  verificationToleranceBps: numberFromEnv(
+    "VERIFY_TOLERANCE_BPS",
+    10,
+  ),
+
+  ethereumRpcUrl: requiredEnv(
+    "ETHEREUM_RPC_URL",
+  ),
+
+  // Optional. Tatum uses this as x-api-key.
+  // Infura/Alchemy normally authenticate in the URL and can leave it blank.
+  ethereumRpcApiKey:
+    process.env.ETHEREUM_RPC_API_KEY?.trim() ||
+    null,
+
+  rhcRpcUrl:
+    process.env.RHC_RPC_URL?.trim() ||
+    "https://rpc.mainnet.chain.robinhood.com",
+
   executionEnabled:
     process.env.ENABLE_EXECUTION === "true",
 });
 
 if (config.mode !== "paper") {
   throw new Error(
-    `Phase 1 supports MODE=paper only; received ${config.mode}`,
+    `Phase 2 supports MODE=paper only; received ${config.mode}`,
   );
 }
 
 if (config.executionEnabled) {
   throw new Error(
-    "Phase 1 refuses ENABLE_EXECUTION=true. Live execution is not implemented.",
+    "Phase 2 refuses ENABLE_EXECUTION=true. Live execution is not implemented.",
+  );
+}
+
+if (
+  config.verificationToleranceBps < 0 ||
+  config.verificationToleranceBps > 100
+) {
+  throw new Error(
+    "VERIFY_TOLERANCE_BPS must be between 0 and 100",
   );
 }
