@@ -1,124 +1,106 @@
-# DaWabLauncher Reference Searcher
+# Phase 3 — Two-leg opportunity engine
 
-Open-source reference searcher for DaWabLauncher.
+Phase 3 extends the independently verified market state into complete cross-chain opportunity modeling.
 
-The project is designed to independently detect, verify, simulate, and eventually support opt-in execution of cross-chain WABIT opportunities between Ethereum and Robinhood Chain.
+## Why this exists
 
-## Safety model
+A cheaper buy quote on one chain does not prove arbitrage.
 
-- Paper mode is the default.
-- No trading capital is supplied by DaWabLauncher.
-- No private keys are required for Phases 1–2.
-- Phases 1–2 do not broadcast transactions.
-- A public market signal is not treated as proof of executable profit.
-- Searchers bring their own infrastructure, inventory, RPCs, and risk controls.
+The economically relevant question is whether the WABIT acquired on the cheaper venue can be sold on the other venue for more WETH than was spent after:
 
-## Configuration
+- venue fees,
+- price impact,
+- WABIT transfer burn on Ethereum,
+- RHC router behavior,
+- partial fills/refunds,
+- and eventually gas.
 
-Copy `.env.example` to `.env`.
+## Evaluated directions
 
-Robinhood Chain has an official public RPC configured by default.
+For every configured WETH size:
 
-Bring your own Ethereum RPC provider. Common choices include Infura, Alchemy, and Tatum.
+### BUY_ETH_SELL_RHC
 
-Never commit `.env`.
+1. Model a WETH -> WABIT buy against the live Ethereum Uniswap V2 reserves.
+2. Apply the canonical WABIT 1 bp transfer burn on pair -> trader output.
+3. Quote selling that exact net WABIT amount through the live RHC TradeRouter.
+4. Compare RHC WETH output with Ethereum WETH input.
 
-## Phase 1 — public feed reader
+If the RHC sell returns WABIT, the candidate is marked PARTIAL and no round-trip profit is claimed because inventory would be left unmatched.
 
-The scanner consumes:
+### BUY_RHC_SELL_ETH
 
-`https://dawabit.tech/searcher/state.json`
+1. Quote WETH -> WABIT through the live RHC TradeRouter.
+2. Use the router's actual `amountInUsed` as WETH cost.
+3. Model selling the resulting WABIT into the live Ethereum pair.
+4. Apply WABIT's 1 bp trader -> pair transfer burn before Uniswap V2 swap math.
+5. Compare Ethereum WETH output with actual RHC WETH spent.
 
-It validates Searcher Beacon schema `0.3`, checks freshness, and reports the public same-notional 0.01 WETH comparison.
+## Size sweep
 
-## Phase 2 — independent RPC verification
+Default:
 
-Phase 2 no longer trusts the public feed as sufficient proof.
+```env
+SWEEP_WETH=0.001,0.0025,0.005,0.01,0.02,0.05,0.1
+```
 
-It independently queries:
+`npm run scan` always performs a full sweep after market verification passes.
 
-### Ethereum
+`npm run watch` performs the sweep on the verification cadence only when the public spread magnitude exceeds:
 
-- chain ID and current block
-- canonical WABIT/WETH pair
-- pair token ordering
-- pair factory
-- live reserves
-- Uniswap V2 0.30% fee math
-- WABIT 0.01% transfer burn
-- net WABIT acquired for the same 0.01 WETH input
+```env
+OPPORTUNITY_TRIGGER_PCT=2
+```
 
-### Robinhood Chain
+This keeps normal monitoring inexpensive.
 
-- chain ID and current block
-- live DaWabLauncher TradeRouter
-- `quoteExactInput(RHC-WETH, WABIT, 0.01 WETH)`
-- active venue
-- amount consumed
-- WABIT output
-- refund amount
+## Gas
 
-The independently calculated outputs are compared with the public Searcher Beacon. A small configurable tolerance accounts for state changing between the website snapshot and independent RPC reads.
+Phase 3 reads live gas prices from both chains.
 
-A Phase 2 `PASS` means:
+Exact transaction gas usage depends on the concrete execution path, allowance state, account state, and router transaction. The public reference searcher therefore does not invent gas-unit constants.
+
+Optional measured gas-unit inputs:
+
+```env
+ETH_BUY_GAS_UNITS=
+ETH_SELL_GAS_UNITS=
+RHC_BUY_GAS_UNITS=
+RHC_SELL_GAS_UNITS=
+```
+
+When all four are configured, the searcher reports modeled net WETH P&L as:
+
+```text
+gross P&L
+- Ethereum gas price × route gas units
+- RHC gas price × route gas units
+= modeled net P&L
+```
+
+Phase 4 will add transaction-level simulation before execution is ever considered.
+
+## Status semantics
 
 `VERIFIED_MARKET_STATE`
 
-It does **not** yet mean:
+means the public feed has been independently reproduced from Ethereum and RHC RPC data.
 
-`EXECUTABLE_ARBITRAGE`
+Positive `gross` Phase 3 P&L means the modeled/quoted two-leg economics are positive before gas.
 
-That requires opposite-leg verification, gas, sizing, inventory, and net P&L work in Phase 3.
+`NOT_SIMULATED`
 
-## Commands
+means it is still not considered executable. Transaction simulation, balances, allowances, slippage limits, deadlines, and failure handling belong to Phase 4.
 
-One full scan with independent verification:
+## Run
 
 ```bash
+npm run check
 npm run scan
 ```
 
-Continuous monitoring:
+Then:
 
 ```bash
 npm run watch
 ```
-
-The public state feed is read every 5 seconds by default. Independent RPC verification runs every 60 seconds by default so the reference searcher does not unnecessarily hammer RPC providers.
-
-Type-check:
-
-```bash
-npm run check
-```
-
-## Roadmap
-
-### Phase 1
-Read and validate DaWabLauncher public state.
-
-### Phase 2
-Independently query Ethereum and Robinhood Chain and verify the public market state.
-
-### Phase 3
-Verify both directional execution legs, optimize trade sizing, estimate gas, and calculate gross/net P&L.
-
-### Phase 4
-Simulate both execution legs before any transaction is allowed.
-
-### Phase 5
-Optional bring-your-own-wallet live execution behind explicit safety gates.
-
-## Execution model
-
-Cross-chain arbitrage is expected to use pre-positioned inventory on both chains. Bridging is inventory rebalancing, not part of an atomic trade.
-
-Example when RHC is cheaper:
-
-1. Buy WABIT on RHC using pre-positioned RHC-WETH.
-2. Sell pre-positioned WABIT on Ethereum.
-3. Rebalance inventory separately when appropriate.
-
-## License
-
-Not yet selected.

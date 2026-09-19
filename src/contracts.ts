@@ -34,12 +34,13 @@ export const ADDRESSES = Object.freeze({
   }),
 });
 
-export const SAME_NOTIONAL_WETH = 10_000_000_000_000_000n; // 0.01 WETH
+export const SAME_NOTIONAL_WETH =
+  10_000_000_000_000_000n; // 0.01 WETH
 
 export const V2_FEE_NUMERATOR = 997n;
 export const V2_FEE_DENOMINATOR = 1000n;
 
-// WABIT burns 1 basis point on transfer.
+// Canonical Ethereum WABIT burns 0.01% (1 bp) on transfer.
 export const WABIT_TRANSFER_BURN_BPS = 1n;
 export const BPS_DENOMINATOR = 10_000n;
 
@@ -54,7 +55,17 @@ export const RHC_TRADE_ROUTER_ABI = [
   "function quoteExactInput(address tokenIn,address tokenOut,uint256 amountIn) view returns (uint8 venue,uint256 amountInUsed,uint256 amountOut,uint256 refundAmount)",
 ] as const;
 
-export function venueName(venue: bigint): string {
+export const RHC_CURVE_ABI = [
+  "function tokensSold() view returns (uint256)",
+  "function quoteReserve() view returns (uint256)",
+  "function activated() view returns (bool)",
+  "function graduated() view returns (bool)",
+  "function quoteSell(uint256 tokenAmount) view returns (uint256 quoteAmount)",
+] as const;
+
+export function venueName(
+  venue: bigint,
+): string {
   if (venue === 0n) return "Unavailable";
   if (venue === 1n) return "BondingCurve";
   if (venue === 2n) return "AMM";

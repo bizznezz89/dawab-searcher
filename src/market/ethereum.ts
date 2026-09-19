@@ -16,18 +16,11 @@ import {
   WABIT_TRANSFER_BURN_BPS,
 } from "../contracts.js";
 import type {
+  EthereumBuyModel,
+  EthereumSellModel,
   EthereumVerification,
 } from "../types.js";
 
-/*
- * Build an authenticated request object when an API key is present.
- *
- * Tatum expects:
- *   x-api-key: <key>
- *
- * Providers such as Infura and Alchemy normally embed authentication
- * in the RPC URL, so ETHEREUM_RPC_API_KEY can remain unset for them.
- */
 const ethereumRequest = new FetchRequest(
   config.ethereumRpcUrl,
 );
@@ -39,10 +32,6 @@ if (config.ethereumRpcApiKey) {
   );
 }
 
-/*
- * batchMaxCount: 1 disables ethers v6 JSON-RPC batching.
- * This keeps Phase 2 compatible with free RPC tiers that reject batch calls.
- */
 const provider = new JsonRpcProvider(
   ethereumRequest,
   ADDRESSES.ethereum.chainId,
@@ -85,18 +74,18 @@ function v2AmountOut(
 }
 
 function applyWabitTransferBurn(
-  grossAmount: bigint,
+  amount: bigint,
 ): {
   burn: bigint;
   net: bigint;
 } {
   const burn =
-    (grossAmount * WABIT_TRANSFER_BURN_BPS) /
+    (amount * WABIT_TRANSFER_BURN_BPS) /
     BPS_DENOMINATOR;
 
   return {
     burn,
-    net: grossAmount - burn,
+    net: amount - burn,
   };
 }
 
@@ -106,10 +95,72 @@ function sleep(ms: number): Promise<void> {
   );
 }
 
-/*
- * Keep reads deliberately sequential.
- * This is a verification path, not a latency race.
- */
+export function modelEthereumBuy(
+  amountInWethRaw: bigint,
+  market: Pick<
+    EthereumVerification,
+    "wethReserveRaw" | "wabitReserveRaw"
+  >,
+): EthereumBuyModel {
+  const grossWabitOutRaw =
+    v2AmountOut(
+      amountInWethRaw,
+      market.wethReserveRaw,
+      market.wabitReserveRaw,
+    );
+
+  // Pair -> trader transfer burns 1 bp.
+  const transfer =
+    applyWabitTransferBurn(
+      grossWabitOutRaw,
+    );
+
+  return {
+    inputWethRaw: amountInWethRaw,
+    grossWabitOutRaw,
+    transferBurnRaw: transfer.burn,
+    netWabitOutRaw: transfer.net,
+  };
+}
+
+export function modelEthereumSell(
+  amountInWabitRaw: bigint,
+  market: Pick<
+    EthereumVerification,
+    "wethReserveRaw" | "wabitReserveRaw"
+  >,
+): EthereumSellModel {
+  // Trader -> pair transfer burns 1 bp, so the pair
+  // receives less than the nominal WABIT input.
+  const transfer =
+    applyWabitTransferBurn(
+      amountInWabitRaw,
+    );
+
+  const wethOutRaw =
+    v2AmountOut(
+      transfer.net,
+      market.wabitReserveRaw,
+      market.wethReserveRaw,
+    );
+
+  return {
+    inputWabitRaw: amountInWabitRaw,
+    transferBurnRaw: transfer.burn,
+    amountReceivedByPairRaw: transfer.net,
+    wethOutRaw,
+  };
+}
+
+export async function getEthereumGasPrice(): Promise<bigint> {
+  const raw = await provider.send(
+    "eth_gasPrice",
+    [],
+  );
+
+  return BigInt(raw);
+}
+
 export async function verifyEthereumBuy(): Promise<EthereumVerification> {
   const network = await provider.getNetwork();
 
@@ -172,16 +223,15 @@ export async function verifyEthereumBuy(): Promise<EthereumVerification> {
     );
   }
 
-  const grossWabitOutRaw = v2AmountOut(
-    SAME_NOTIONAL_WETH,
+  const market = {
     wethReserveRaw,
     wabitReserveRaw,
-  );
+  };
 
-  const transfer =
-    applyWabitTransferBurn(
-      grossWabitOutRaw,
-    );
+  const buy = modelEthereumBuy(
+    SAME_NOTIONAL_WETH,
+    market,
+  );
 
   return {
     chainId: network.chainId,
@@ -199,9 +249,12 @@ export async function verifyEthereumBuy(): Promise<EthereumVerification> {
     wethReserveRaw,
     wabitReserveRaw,
 
-    amountInWethRaw: SAME_NOTIONAL_WETH,
-    grossWabitOutRaw,
-    transferBurnRaw: transfer.burn,
-    netWabitOutRaw: transfer.net,
+    amountInWethRaw: buy.inputWethRaw,
+    grossWabitOutRaw:
+      buy.grossWabitOutRaw,
+    transferBurnRaw:
+      buy.transferBurnRaw,
+    netWabitOutRaw:
+      buy.netWabitOutRaw,
   };
 }

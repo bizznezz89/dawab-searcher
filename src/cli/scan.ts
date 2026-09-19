@@ -12,7 +12,11 @@ import {
   assessPhaseOne,
 } from "../strategy/crossChainArb.js";
 import {
+  evaluateOpportunitySweep,
+} from "../strategy/opportunity.js";
+import {
   renderObservation,
+  renderOpportunitySweep,
   renderVerification,
 } from "../format.js";
 import {
@@ -20,7 +24,8 @@ import {
 } from "../verification.js";
 
 async function main(): Promise<void> {
-  const state = await fetchDaWabState();
+  const state =
+    await fetchDaWabState();
 
   const observation =
     observePublicMarket(state);
@@ -54,9 +59,25 @@ async function main(): Promise<void> {
     ),
   );
 
-  if (verification.status !== "PASS") {
+  if (
+    verification.status !== "PASS"
+  ) {
+    console.log(
+      "Phase 3 sweep skipped because independent market verification failed.",
+    );
+
     process.exitCode = 2;
+    return;
   }
+
+  const sweep =
+    await evaluateOpportunitySweep(
+      ethereum,
+    );
+
+  process.stdout.write(
+    renderOpportunitySweep(sweep),
+  );
 }
 
 main().catch((error: unknown) => {
