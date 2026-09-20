@@ -30,6 +30,13 @@ import {
   evaluatePaperExecutionGate,
   renderPaperExecutionGate,
 } from "../execution/paperGate.js";
+import {
+  executeLiveOpportunity,
+  gateCanReachLiveExecution,
+} from "../execution/liveExecutor.js";
+import type {
+  LiveExecutionResult,
+} from "../execution/liveExecutor.js";
 import type {
   IndependentVerification,
   OpportunitySweep,
@@ -61,6 +68,23 @@ let lastPaperGateError:
 let lastVerifiedAt = 0;
 let lastSweepAt = 0;
 let lastPaperGateAt = 0;
+
+let lastLiveExecution:
+  | LiveExecutionResult
+  | null = null;
+
+let executionCircuitOpen =
+  false;
+
+/*
+ * First-live-deployment latch.
+ *
+ * A process may attempt at most one autonomous live execution. Restarting the
+ * watcher is an explicit operator action. Persistent autonomous multi-trade
+ * operation comes only after the durable journal/circuit-breaker phase.
+ */
+let liveExecutionAttempted =
+  false;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) =>
@@ -155,6 +179,36 @@ async function runOnce(): Promise<void> {
 
             lastPaperGateAt =
               Date.now();
+
+            if (
+              config.liveExecution &&
+              !executionCircuitOpen &&
+              !liveExecutionAttempted &&
+              gateCanReachLiveExecution(
+                lastPaperGate,
+              )
+            ) {
+              /*
+               * Consume the one-shot latch before entering the live executor.
+               * Even an aborted attempt requires an explicit process restart.
+               */
+              liveExecutionAttempted =
+                true;
+
+              lastLiveExecution =
+                await executeLiveOpportunity(
+                  simulation,
+                  lastPaperGate,
+                );
+
+              if (
+                lastLiveExecution
+                  .openedCircuitBreaker
+              ) {
+                executionCircuitOpen =
+                  true;
+              }
+            }
           } catch (error: unknown) {
             lastPaperGateError =
               error instanceof Error
@@ -180,7 +234,9 @@ async function runOnce(): Promise<void> {
     }
   }
 
-  console.clear();
+  if (!config.liveExecution) {
+    console.clear();
+  }
 
   process.stdout.write(
     renderObservation(
@@ -249,12 +305,76 @@ async function runOnce(): Promise<void> {
           1,
         )}s`,
       );
+
+      if (
+        lastLiveExecution
+      ) {
+        console.log("");
+        console.log(
+          "Phase 5E integrated live executor",
+        );
+        console.log(
+          "────────────────────────────────",
+        );
+        console.log(
+          `Status:                 ${lastLiveExecution.status}`,
+        );
+        console.log(
+          `Wallet:                 ${lastLiveExecution.wallet}`,
+        );
+        console.log(
+          `Reason:                 ${lastLiveExecution.reason}`,
+        );
+
+        for (
+          const tx of
+          lastLiveExecution.bootstrap.transactions
+        ) {
+          console.log(
+            `${tx.chain} ${tx.action}: ${tx.txHash}`,
+          );
+        }
+
+        if (
+          lastLiveExecution.rhcSell
+        ) {
+          console.log(
+            `RHC sell tx:            ${lastLiveExecution.rhcSell.txHash}`,
+          );
+        }
+
+        if (
+          lastLiveExecution.ethereumBuy
+        ) {
+          console.log(
+            `Ethereum buy tx:        ${lastLiveExecution.ethereumBuy.txHash}`,
+          );
+        }
+
+        if (
+          lastLiveExecution
+            .realizedNetWethRaw !=
+          null
+        ) {
+          console.log(
+            `Realized net raw:       ${lastLiveExecution.realizedNetWethRaw.toString()} wei-WETH`,
+          );
+        }
+
+        console.log(
+          `Circuit breaker:        ${executionCircuitOpen ? "OPEN" : "CLOSED"}`,
+        );
+
+        console.log(
+          `Live one-shot latch:    ${liveExecutionAttempted ? "CONSUMED" : "ARMED"}`,
+        );
+      }
     } else if (
       lastPaperGateError
     ) {
       console.log("");
       console.log(
-        "Phase 5A autonomous paper execution gate",
+        "Phase 5E integrated execution gate",
       );
       console.log(
         "────────────────────────────────────────",
