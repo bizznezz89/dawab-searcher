@@ -1,106 +1,98 @@
-# Phase 3 — Two-leg opportunity engine
+# Phase 4 — Hybrid fork execution simulation
 
-Phase 3 extends the independently verified market state into complete cross-chain opportunity modeling.
+Phase 4 executes the currently profitable cross-chain route against forked
+live state without broadcasting any public-chain transactions.
 
-## Why this exists
+## Engines
 
-A cheaper buy quote on one chain does not prove arbitrage.
+- Ethereum leg: Anvil fork
+- RHC leg: Forge fork
 
-The economically relevant question is whether the WABIT acquired on the cheaper venue can be sold on the other venue for more WETH than was spent after:
+RHC intentionally uses Forge because the Robinhood Chain bridged WABIT proxy
+executes correctly in Forge fork tests but did not execute reliably through the
+temporary Anvil RHC fork.
 
-- venue fees,
-- price impact,
-- WABIT transfer burn on Ethereum,
-- RHC router behavior,
-- partial fills/refunds,
-- and eventually gas.
+## Requirements
 
-## Evaluated directions
+- Existing Phase 3 searcher is green.
+- `anvil` is on PATH.
+- `forge` is on PATH.
+- `ETHEREUM_RPC_URL` is a working Ethereum mainnet endpoint.
+- `RHC_RPC_URL` is a working Robinhood Chain mainnet endpoint.
+- No new `.env` variables are required.
 
-For every configured WETH size:
-
-### BUY_ETH_SELL_RHC
-
-1. Model a WETH -> WABIT buy against the live Ethereum Uniswap V2 reserves.
-2. Apply the canonical WABIT 1 bp transfer burn on pair -> trader output.
-3. Quote selling that exact net WABIT amount through the live RHC TradeRouter.
-4. Compare RHC WETH output with Ethereum WETH input.
-
-If the RHC sell returns WABIT, the candidate is marked PARTIAL and no round-trip profit is claimed because inventory would be left unmatched.
-
-### BUY_RHC_SELL_ETH
-
-1. Quote WETH -> WABIT through the live RHC TradeRouter.
-2. Use the router's actual `amountInUsed` as WETH cost.
-3. Model selling the resulting WABIT into the live Ethereum pair.
-4. Apply WABIT's 1 bp trader -> pair transfer burn before Uniswap V2 swap math.
-5. Compare Ethereum WETH output with actual RHC WETH spent.
-
-## Size sweep
-
-Default:
-
-```env
-SWEEP_WETH=0.001,0.0025,0.005,0.01,0.02,0.05,0.1
-```
-
-`npm run scan` always performs a full sweep after market verification passes.
-
-`npm run watch` performs the sweep on the verification cadence only when the public spread magnitude exceeds:
-
-```env
-OPPORTUNITY_TRIGGER_PCT=2
-```
-
-This keeps normal monitoring inexpensive.
-
-## Gas
-
-Phase 3 reads live gas prices from both chains.
-
-Exact transaction gas usage depends on the concrete execution path, allowance state, account state, and router transaction. The public reference searcher therefore does not invent gas-unit constants.
-
-Optional measured gas-unit inputs:
-
-```env
-ETH_BUY_GAS_UNITS=
-ETH_SELL_GAS_UNITS=
-RHC_BUY_GAS_UNITS=
-RHC_SELL_GAS_UNITS=
-```
-
-When all four are configured, the searcher reports modeled net WETH P&L as:
+The Forge harness is self-contained under:
 
 ```text
-gross P&L
-- Ethereum gas price × route gas units
-- RHC gas price × route gas units
-= modeled net P&L
+forge/rhc-sim/
 ```
 
-Phase 4 will add transaction-level simulation before execution is ever considered.
-
-## Status semantics
-
-`VERIFIED_MARKET_STATE`
-
-means the public feed has been independently reproduced from Ethereum and RHC RPC data.
-
-Positive `gross` Phase 3 P&L means the modeled/quoted two-leg economics are positive before gas.
-
-`NOT_SIMULATED`
-
-means it is still not considered executable. Transaction simulation, balances, allowances, slippage limits, deadlines, and failure handling belong to Phase 4.
+It does not depend on the separate `relaunchpad` repository.
 
 ## Run
 
 ```bash
 npm run check
-npm run scan
+npm run simulate
 ```
 
-Then:
+## Execution flow
 
-```bash
-npm run watch
+1. Verify the public market feed independently.
+2. Re-run the Phase 3 sweep and optimizer.
+3. Start an Ethereum Anvil fork.
+4. Execute the optimized WETH -> WABIT buy through canonical Uniswap V2.
+5. Record the actual WABIT balance delta and Ethereum receipt gas.
+6. Stop the Ethereum fork.
+7. Pass that exact raw WABIT amount to the Forge RHC harness.
+8. Forge forks current RHC mainnet state.
+9. Seed a fork-only trader from the known WABIT genesis inventory source.
+10. Approve the deployed ReLaunchTradeRouter on the fork.
+11. Quote that exact WABIT input against the live bonding curve.
+12. Execute WABIT -> WETH through the deployed TradeRouter.
+13. Verify the recipient WETH delta equals the router output.
+14. Measure the deployed router-call gas.
+15. Apply a conservative maximum intrinsic-calldata allowance to model a
+    complete RHC EOA transaction.
+16. Apply the current Phase 3 gas prices.
+17. Report executed-fork gross profit and modeled gas-adjusted net profit.
+
+## Gas accounting
+
+Ethereum uses the actual fork transaction receipt `gasUsed`.
+
+Forge measures the RHC deployed router-call execution. The searcher then adds:
+
+```text
+21,000 base intrinsic gas
++ max 16 gas × 196 calldata bytes
+= 24,136 gas
 ```
+
+This is intentionally conservative because real ABI calldata contains zero
+bytes, which cost less than 16 gas each. The Forge external-call measurement
+also contains a small call overhead that a direct EOA transaction does not.
+
+Setup operations remain excluded from recurring arbitrage gas:
+
+- wrapping fork ETH into WETH,
+- fork-only RHC inventory seeding,
+- ERC-20 approvals.
+
+Production assumes pre-positioned inventory and reusable allowances.
+
+## Safety
+
+No `--broadcast` flag is used.
+
+Both fork legs use `amountOutMin = 0` only inside isolated simulation state.
+Live execution must use fresh quotes and slippage-protected minimum outputs.
+
+Phase 4 currently implements only:
+
+```text
+BUY ETH -> SELL RHC
+```
+
+If the profitable direction flips, the simulator stops rather than pretending
+the reverse route has been validated.

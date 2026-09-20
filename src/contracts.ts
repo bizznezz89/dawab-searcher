@@ -15,10 +15,19 @@ export const ADDRESSES = Object.freeze({
     uniswapV2Factory: getAddress(
       "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
     ),
+    uniswapV2Router02: getAddress(
+      "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+    ),
   }),
 
   rhc: Object.freeze({
     chainId: 4663,
+    relaunchFactory: getAddress(
+      "0x0E54a12dB2d6B8f309269ef98F8b9c2764aa3A92",
+    ),
+    wabitInventorySource: getAddress(
+      "0x981FB95d4101D1F6238456b680cCa1fa818e86a4",
+    ),
     wabit: getAddress(
       "0xcE39cA04C9c924c949172FDeeFF588Ab586a7Db1",
     ),
@@ -40,9 +49,25 @@ export const SAME_NOTIONAL_WETH =
 export const V2_FEE_NUMERATOR = 997n;
 export const V2_FEE_DENOMINATOR = 1000n;
 
-// Canonical Ethereum WABIT burns 0.01% (1 bp) on transfer.
 export const WABIT_TRANSFER_BURN_BPS = 1n;
 export const BPS_DENOMINATOR = 10_000n;
+
+export const ERC20_ABI = [
+  "function balanceOf(address account) view returns (uint256)",
+  "function allowance(address owner,address spender) view returns (uint256)",
+  "function approve(address spender,uint256 amount) returns (bool)",
+  "function transfer(address to,uint256 amount) returns (bool)",
+] as const;
+
+export const WETH_ABI = [
+  ...ERC20_ABI,
+  "function deposit() payable",
+  "function withdraw(uint256 amount)",
+] as const;
+
+export const UNISWAP_V2_ROUTER02_ABI = [
+  "function swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)",
+] as const;
 
 export const UNISWAP_V2_PAIR_ABI = [
   "function token0() view returns (address)",
@@ -53,6 +78,7 @@ export const UNISWAP_V2_PAIR_ABI = [
 
 export const RHC_TRADE_ROUTER_ABI = [
   "function quoteExactInput(address tokenIn,address tokenOut,uint256 amountIn) view returns (uint8 venue,uint256 amountInUsed,uint256 amountOut,uint256 refundAmount)",
+  "function swapExactInput(address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOutMin,address recipient,uint256 deadline) returns (uint256 amountInUsed,uint256 amountOut,uint256 refundAmount)",
 ] as const;
 
 export const RHC_CURVE_ABI = [
