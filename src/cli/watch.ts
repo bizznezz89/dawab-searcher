@@ -23,6 +23,13 @@ import {
 import {
   verifyAgainstFeed,
 } from "../verification.js";
+import {
+  simulateBestOpportunity,
+} from "../simulation/fork.js";
+import {
+  evaluatePaperExecutionGate,
+  renderPaperExecutionGate,
+} from "../execution/paperGate.js";
 import type {
   IndependentVerification,
   OpportunitySweep,
@@ -39,8 +46,21 @@ let lastSweep:
   | OpportunitySweep
   | null = null;
 
+let lastPaperGate:
+  | Awaited<
+      ReturnType<
+        typeof evaluatePaperExecutionGate
+      >
+    >
+  | null = null;
+
+let lastPaperGateError:
+  | string
+  | null = null;
+
 let lastVerifiedAt = 0;
 let lastSweepAt = 0;
+let lastPaperGateAt = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) =>
@@ -102,9 +122,61 @@ async function runOnce(): Promise<void> {
         );
 
       lastSweepAt = Date.now();
+
+      lastPaperGate = null;
+      lastPaperGateError = null;
+      lastPaperGateAt = 0;
+
+      const candidate =
+        lastSweep.bestGross;
+
+      if (
+        candidate != null &&
+        candidate.grossProfitWethRaw != null &&
+        candidate.grossProfitWethRaw > 0n
+      ) {
+        if (
+          candidate.direction !==
+          "BUY_ETH_SELL_RHC"
+        ) {
+          lastPaperGateError =
+            "SKIP — best opportunity is RHC→ETH, but that execution route has not yet passed Phase 4 fork validation.";
+        } else {
+          try {
+            const simulation =
+              await simulateBestOpportunity(
+                lastSweep,
+              );
+
+            lastPaperGate =
+              await evaluatePaperExecutionGate(
+                simulation,
+              );
+
+            lastPaperGateAt =
+              Date.now();
+          } catch (error: unknown) {
+            lastPaperGateError =
+              error instanceof Error
+                ? `SKIP — ${error.message}`
+                : `SKIP — ${String(error)}`;
+
+            lastPaperGateAt =
+              Date.now();
+          }
+        }
+      } else {
+        lastPaperGateError =
+          "SKIP — no positive optimized gross opportunity.";
+        lastPaperGateAt =
+          Date.now();
+      }
     } else if (!sweepTriggered) {
       lastSweep = null;
       lastSweepAt = 0;
+      lastPaperGate = null;
+      lastPaperGateError = null;
+      lastPaperGateAt = 0;
     }
   }
 
@@ -157,6 +229,46 @@ async function runOnce(): Promise<void> {
         1,
       )}s`,
     );
+
+    if (lastPaperGate) {
+      process.stdout.write(
+        renderPaperExecutionGate(
+          lastPaperGate,
+        ),
+      );
+
+      const gateAge =
+        Math.max(
+          0,
+          Date.now() -
+            lastPaperGateAt,
+        ) / 1000;
+
+      console.log(
+        `Paper execution gate age: ${gateAge.toFixed(
+          1,
+        )}s`,
+      );
+    } else if (
+      lastPaperGateError
+    ) {
+      console.log("");
+      console.log(
+        "Phase 5A autonomous paper execution gate",
+      );
+      console.log(
+        "────────────────────────────────────────",
+      );
+      console.log(
+        `PAPER ACTION:           ${lastPaperGateError}`,
+      );
+      console.log(
+        "Signing:                DISABLED",
+      );
+      console.log(
+        "Broadcast:              DISABLED",
+      );
+    }
   } else {
     console.log("");
     console.log(

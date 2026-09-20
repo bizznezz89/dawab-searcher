@@ -1,98 +1,100 @@
-# Phase 4 — Hybrid fork execution simulation
+# Phase 5A — Autonomous paper execution gate
 
-Phase 4 executes the currently profitable cross-chain route against forked
-live state without broadcasting any public-chain transactions.
+Phase 5A converts the existing continuous watcher into a deterministic paper
+execution agent.
 
-## Engines
+It does not require a wallet address, private key, signing provider, manual
+slippage value, or any new `.env` setting.
 
-- Ethereum leg: Anvil fork
-- RHC leg: Forge fork
+It does not broadcast transactions.
 
-RHC intentionally uses Forge because the Robinhood Chain bridged WABIT proxy
-executes correctly in Forge fork tests but did not execute reliably through the
-temporary Anvil RHC fork.
+## Flow
 
-## Requirements
-
-- Existing Phase 3 searcher is green.
-- `anvil` is on PATH.
-- `forge` is on PATH.
-- `ETHEREUM_RPC_URL` is a working Ethereum mainnet endpoint.
-- `RHC_RPC_URL` is a working Robinhood Chain mainnet endpoint.
-- No new `.env` variables are required.
-
-The Forge harness is self-contained under:
+The existing `npm run watch` loop now performs:
 
 ```text
-forge/rhc-sim/
+public feed
+    ↓
+independent Ethereum + RHC verification
+    ↓
+Phase 3 directional sweep + optimizer
+    ↓
+positive supported opportunity?
+    ↓ yes
+Phase 4 hybrid fork execution
+    ↓
+fresh public feed + fresh independent RPC reads
+    ↓
+re-evaluate the SAME Phase 4 trade size
+    ↓
+fresh gas prices × Phase 4 measured gas units
+    ↓
+fresh gas-adjusted net
+    ↓
+WOULD_EXECUTE or SKIP
 ```
 
-It does not depend on the separate `relaunchpad` repository.
+## Why Phase 5A re-reads the market
+
+Phase 4 takes several seconds because it executes both legs against forks.
+
+The market may move during that time.
+
+Phase 5A therefore does not treat the original optimizer snapshot as the final
+paper decision. After Phase 4 succeeds it fetches a new public state, performs
+new independent Ethereum and RHC verification, recalculates the Ethereum output
+for the exact Phase 4 input size, requotes that WABIT amount on the deployed
+RHC TradeRouter, fetches fresh gas prices, and recalculates net P&L.
+
+## Current paper gate
+
+`WOULD_EXECUTE` currently requires:
+
+- the refreshed public feed still independently verifies;
+- the route is still the active RHC BondingCurve route proven by Phase 4;
+- the refreshed Ethereum output fits inside current conservative RHC sell
+  capacity;
+- the RHC quote is a full fill with no refund;
+- fresh gross profit is positive after the measured Phase 4 gas units are
+  repriced at current gas prices.
+
+Otherwise the action is `SKIP`.
+
+## Deliberately not included yet
+
+Phase 5A is not the final live-execution gate.
+
+It does not yet:
+
+- derive production `amountOutMin` values;
+- sign transactions;
+- broadcast transactions;
+- manage a private key;
+- inspect live execution-wallet inventory or allowances;
+- execute the reverse RHC -> Ethereum direction.
+
+Those belong in later Phase 5 hardening after the autonomous paper gate is
+stable.
 
 ## Run
 
+No new command is required:
+
 ```bash
-npm run check
-npm run simulate
+npm run watch
 ```
 
-## Execution flow
+When a positive supported opportunity is found, the watcher automatically runs
+Phase 4 and Phase 5A.
 
-1. Verify the public market feed independently.
-2. Re-run the Phase 3 sweep and optimizer.
-3. Start an Ethereum Anvil fork.
-4. Execute the optimized WETH -> WABIT buy through canonical Uniswap V2.
-5. Record the actual WABIT balance delta and Ethereum receipt gas.
-6. Stop the Ethereum fork.
-7. Pass that exact raw WABIT amount to the Forge RHC harness.
-8. Forge forks current RHC mainnet state.
-9. Seed a fork-only trader from the known WABIT genesis inventory source.
-10. Approve the deployed ReLaunchTradeRouter on the fork.
-11. Quote that exact WABIT input against the live bonding curve.
-12. Execute WABIT -> WETH through the deployed TradeRouter.
-13. Verify the recipient WETH delta equals the router output.
-14. Measure the deployed router-call gas.
-15. Apply a conservative maximum intrinsic-calldata allowance to model a
-    complete RHC EOA transaction.
-16. Apply the current Phase 3 gas prices.
-17. Report executed-fork gross profit and modeled gas-adjusted net profit.
-
-## Gas accounting
-
-Ethereum uses the actual fork transaction receipt `gasUsed`.
-
-Forge measures the RHC deployed router-call execution. The searcher then adds:
+The terminal will show either:
 
 ```text
-21,000 base intrinsic gas
-+ max 16 gas × 196 calldata bytes
-= 24,136 gas
+PAPER ACTION:           WOULD_EXECUTE
+Signing:                DISABLED
+Broadcast:              DISABLED
 ```
 
-This is intentionally conservative because real ABI calldata contains zero
-bytes, which cost less than 16 gas each. The Forge external-call measurement
-also contains a small call overhead that a direct EOA transaction does not.
+or a `SKIP` reason.
 
-Setup operations remain excluded from recurring arbitrage gas:
-
-- wrapping fork ETH into WETH,
-- fork-only RHC inventory seeding,
-- ERC-20 approvals.
-
-Production assumes pre-positioned inventory and reusable allowances.
-
-## Safety
-
-No `--broadcast` flag is used.
-
-Both fork legs use `amountOutMin = 0` only inside isolated simulation state.
-Live execution must use fresh quotes and slippage-protected minimum outputs.
-
-Phase 4 currently implements only:
-
-```text
-BUY ETH -> SELL RHC
-```
-
-If the profitable direction flips, the simulator stops rather than pretending
-the reverse route has been validated.
+`ENABLE_EXECUTION=true` remains rejected by configuration.

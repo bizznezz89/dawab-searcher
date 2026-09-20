@@ -186,13 +186,13 @@ export const config = Object.freeze({
 
 if (config.mode !== "paper") {
   throw new Error(
-    `Phase 3 supports MODE=paper only; received ${config.mode}`,
+    `Phase 5A supports MODE=paper only; received ${config.mode}`,
   );
 }
 
 if (config.executionEnabled) {
   throw new Error(
-    "Phase 3 refuses ENABLE_EXECUTION=true. Transaction simulation and live execution are not implemented yet.",
+    "Phase 5A refuses ENABLE_EXECUTION=true. Fork simulation and the autonomous paper execution gate are implemented; signing and public-chain broadcast remain disabled.",
   );
 }
 

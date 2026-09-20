@@ -20,7 +20,7 @@ import {
 
 async function main(): Promise<void> {
   console.log(
-    "DaWab Searcher Phase 4A",
+    "DaWab Searcher Phase 4",
   );
   console.log(
     "Local-fork execution simulation only — no public transactions will be broadcast.",
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   );
 
   console.log(
-    "Launching temporary Ethereum and RHC forks...",
+    "Launching hybrid Ethereum/Anvil + RHC/Forge fork simulation...",
   );
 
   const result =
@@ -97,7 +97,7 @@ main().catch((error: unknown) => {
       : String(error);
 
   console.error(
-    `Phase 4A simulation failed: ${message}`,
+    `Phase 4 simulation failed: ${message}`,
   );
 
   process.exitCode = 1;
