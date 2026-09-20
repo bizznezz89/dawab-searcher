@@ -1,6 +1,13 @@
+import {
+  formatEther,
+  formatUnits,
+} from "ethers";
+
 import { config } from "../config.js";
 import type {
+  EthereumVerification,
   MarketObservation,
+  RhcVerification,
   SearcherStateV03,
   VenueSignal,
 } from "../types.js";
@@ -169,3 +176,127 @@ export function observePublicMarket(
     executionStatus: "UNVERIFIED",
   };
 }
+
+function percentDifference(
+  numerator:
+    bigint,
+  denominator:
+    bigint,
+): number {
+  if (
+    denominator === 0n
+  ) {
+    throw new Error(
+      "Cannot calculate market percentage against a zero denominator.",
+    );
+  }
+
+  const scale =
+    1_000_000n;
+
+  const delta =
+    numerator -
+    denominator;
+
+  const scaled =
+    (
+      delta *
+      100n *
+      scale
+    ) /
+    denominator;
+
+  return (
+    Number(
+      scaled,
+    ) /
+    Number(
+      scale,
+    )
+  );
+}
+
+export function observeDirectMarket(
+  ethereum:
+    EthereumVerification,
+  rhc:
+    RhcVerification,
+): MarketObservation {
+  const priceSpreadPct =
+    percentDifference(
+      ethereum
+        .netWabitOutRaw,
+      rhc
+        .amountOutWabitRaw,
+    );
+
+  const outputDifferencePct =
+    percentDifference(
+      rhc
+        .amountOutWabitRaw,
+      ethereum
+        .netWabitOutRaw,
+    );
+
+  return {
+    generatedAt:
+      new Date().toISOString(),
+
+    ageMs:
+      0,
+
+    rhcBlock:
+      rhc.blockNumber
+        .toString(),
+
+    ethereumBlock:
+      ethereum.blockNumber
+        .toString(),
+
+    rhcVenue:
+      rhc.venueName,
+
+    notionalWeth:
+      formatEther(
+        ethereum
+          .amountInWethRaw,
+      ),
+
+    ethereumWabitOut:
+      formatUnits(
+        ethereum
+          .netWabitOutRaw,
+        18,
+      ),
+
+    rhcWabitOut:
+      formatUnits(
+        rhc
+          .amountOutWabitRaw,
+        18,
+      ),
+
+    /*
+     * These fields are not used as an execution authority. Keep them
+     * informational and derive the actual executable route from raw RPC state.
+     */
+    ethereumEffectiveWethPerWabit:
+      "",
+
+    rhcEffectiveWethPerWabit:
+      "",
+
+    priceSpreadPct,
+
+    outputDifferencePct,
+
+    venueSignal:
+      venueSignalFromSpread(
+        priceSpreadPct,
+      ),
+
+    executionStatus:
+      "UNVERIFIED",
+  };
+}
+

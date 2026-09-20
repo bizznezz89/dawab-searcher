@@ -8,7 +8,8 @@
     "scan": "tsx src/cli/scan.ts",
     "watch": "tsx src/cli/watch.ts",
     "check": "tsc --noEmit",
-    "simulate": "tsx src/cli/simulate.ts"
+    "simulate": "tsx src/cli/simulate.ts",
+    "circuit:clear": "tsx src/cli/clearCircuit.ts"
   },
   "keywords": [],
   "author": "",

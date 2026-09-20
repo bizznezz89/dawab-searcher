@@ -1,215 +1,256 @@
-# Phase 5E.2 — Live hot path
+# DaWab Searcher — Phase 6 Autonomous Production Loop
 
-Phase 5E.2 removes local fork startup from the live opportunity path.
+DaWab Searcher is the reference execution searcher for the DaWabLauncher
+Searcher Kit.
 
-## Cold path vs hot path
+Phase 6 keeps the proven Phase 5E.2 hot executor, removes the temporary
+one-trade process latch, and adds durable execution safety for continuous live
+operation.
 
-### Cold / development path
+## Operating modes
 
-Paper mode retains the expensive proof stack:
+The operator still changes only the searcher mode.
 
-```text
-Phase 3 optimize
-→ Ethereum Anvil fork
-→ RHC Forge fork
-→ Phase 5 cold paper gate
-→ bootstrap fork proof
-```
-
-Use this for development, route changes, contract changes, and lifecycle
-validation.
-
-### Live hot path
-
-When:
-
-```env
-MODE=live
-ENABLE_EXECUTION=true
-```
-
-the watcher does **not** launch Anvil or Forge.
-
-The live path is:
-
-```text
-fresh public feed + direct RPC verification
-→ Phase 3 optimize
-→ assert signer
-→ fresh route/capacity check
-→ inspect wallet
-→ auto-wrap exact WETH shortfall if needed
-→ auto-approve only if needed
-→ fresh route verification again
-→ exact static-call both live routes
-→ exact estimateGas() both live routes
-→ fresh gas prices
-→ derive automatic protection
-→ final protected static-call + exact estimateGas
-→ RHC protected sell
-→ Ethereum protected hedge
-```
-
-## Why this is faster
-
-The old live attempt inherited development validation and started:
-
-```text
-anvil
-forge
-```
-
-inside the opportunity cycle.
-
-That produced multi-minute stale cycles.
-
-Phase 5E.2 removes both subprocesses from live mode entirely.
-
-## Gas
-
-There is no manual gas-unit profile in the live path.
-
-The executor uses:
-
-```text
-provider.getFeeData()
-contract.method.estimateGas(...)
-```
-
-for the actual current calls.
-
-A 25% gas-limit headroom is applied to the estimates.
-
-The only fixed gas number remaining is a pre-bootstrap **native-ETH reserve
-guard** of 500,000 gas units per chain. It is not used to calculate trade
-profit. Its only purpose is to prevent the autowrapper from consuming native
-ETH that may be needed before exact post-bootstrap swap gas can be estimated.
-
-## Autowrapper
-
-If Ethereum WETH is short:
-
-```text
-required WETH
-- current WETH
-= exact wrap amount
-```
-
-Only the shortfall is wrapped.
-
-If the wallet is already funded, no wrapping occurs.
-
-## Approvals
-
-Approvals are idempotent:
-
-```text
-Ethereum WETH → Uniswap V2 Router02
-RHC WABIT     → ReLaunchTradeRouter
-```
-
-`MaxUint256` is used only when the current allowance is insufficient.
-
-## Bootstrap economics
-
-Before sending a wrap or approval, the live executor estimates those setup
-transactions and refuses bootstrap if their maximum estimated fee is greater
-than or equal to the current gross arbitrage edge.
-
-After any bootstrap transaction mines, the original market decision is thrown
-away and the market is revalidated from scratch.
-
-## Protection
-
-Protection is derived from **padded current live gas estimates**, not historical
-Phase 4 gas.
-
-The existing policy remains:
-
-```text
-retain at least 50% of fresh modeled net
-```
-
-The final protected calls are then static-called and estimated again.
-
-If final maximum gas exposure would weaken protected net below the retained
-floor, no swap is broadcast.
-
-## Transaction order
-
-The capacity-sensitive RHC leg remains first:
-
-```text
-RHC WABIT → WETH
-then
-Ethereum WETH → WABIT
-```
-
-If RHC fails, Ethereum is untouched.
-
-If RHC succeeds, the Ethereum leg becomes a mandatory hedge.
-
-## Ctrl+C semantics
-
-Before the first RHC swap broadcast:
-
-```text
-Ctrl+C → operator abort accepted
-       → no swap is broadcast
-       → process exits after current safe await returns
-```
-
-After the RHC transaction has been broadcast:
-
-```text
-Ctrl+C → stop request remembered
-       → Ethereum hedge is still attempted
-       → process exits after committed hedge sequence
-```
-
-This prevents an operator interrupt from deliberately stranding a one-legged
-cross-chain trade.
-
-## First-live one-shot latch
-
-The first-deployment safety latch remains.
-
-A process gets at most one live execution attempt:
-
-```text
-Live one-shot latch: ARMED
-→ attempt starts
-Live one-shot latch: CONSUMED
-```
-
-Restarting the process is required for another attempt.
-
-## Apply
-
-Extract this delta over the repository.
-
-Then:
-
-```bash
-npm run check
-```
-
-The user's local `.env` controls the mode. No `.env` file is included in this
-delta.
-
-For cold paper validation:
+### Paper / cold validation
 
 ```env
 MODE=paper
 ENABLE_EXECUTION=false
 ```
 
-For the one-shot hot live executor:
+Paper mode keeps the full development proof stack:
+
+```text
+public state.json
+→ independent Ethereum + RHC verification
+→ opportunity sweep / optimizer
+→ Ethereum Anvil fork
+→ RHC Forge fork
+→ protected paper gate
+→ fork bootstrap proof
+```
+
+Paper mode never signs or broadcasts.
+
+### Live / autonomous hot path
 
 ```env
 MODE=live
 ENABLE_EXECUTION=true
 ```
 
-`EXECUTOR_ADDRESS` and `EXECUTOR_PRIVATE_KEY` must be populated only in the
-ignored local `.env`.
+Live mode does not launch Anvil or Forge.
+
+```text
+direct Ethereum + RHC RPC reads
+→ optional public-feed cross-check
+→ opportunity sweep / optimizer
+→ persistent attempt journal
+→ signer / wallet / allowance checks
+→ direct route + capacity revalidation
+→ exact live staticCall + estimateGas
+→ protection envelope
+→ final exact preflight
+→ protected RHC sell
+→ mandatory Ethereum hedge
+→ journal result
+→ fresh market read on the next loop
+```
+
+After a successful trade, the prior candidate is discarded. The next loop
+re-reads both chains and re-optimizes from current state before another trade
+can execute.
+
+## Public `state.json` is advisory in live mode
+
+The public DaWabLauncher state feed is still fetched and cross-checked when
+available, but it is no longer an execution dependency.
+
+If the feed returns a temporary 502, times out, is stale, or disagrees with
+fresh chain state:
+
+```text
+LIVE:
+state.json unavailable/mismatch
+→ log advisory status
+→ continue from direct Ethereum + RHC RPC state
+
+PAPER:
+state.json remains required
+```
+
+Direct RPC state is the live execution authority.
+
+## Durable execution journal
+
+Phase 6 writes local runtime state under:
+
+```text
+.dawab/execution-state.json
+.dawab/execution-journal.jsonl
+```
+
+`.dawab/` is gitignored.
+
+The state file tracks:
+
+```text
+circuit-open status
+circuit reason
+in-flight attempt and stage
+RHC / Ethereum transaction hashes
+completed trade count
+last realized net
+```
+
+The JSONL journal is append-only operational history.
+
+## Durable circuit breaker
+
+Before a live attempt begins, Phase 6 persists an in-flight attempt.
+
+Lifecycle stages are journaled as execution progresses:
+
+```text
+PREPARING
+RHC_SELL_BROADCAST
+RHC_SELL_MINED
+ETH_HEDGE_BROADCAST
+ETH_HEDGE_MINED
+```
+
+If both legs finish successfully:
+
+```text
+attempt resolved
+→ circuit CLOSED
+→ next market loop starts fresh
+```
+
+If the RHC leg succeeds but the Ethereum hedge fails:
+
+```text
+CRITICAL_HEDGE_FAILED
+→ circuit OPEN
+→ state survives process restart
+→ no further autonomous trades
+```
+
+If the process restarts with any unresolved in-flight attempt, Phase 6 opens
+the circuit conservatively and requires operator reconciliation.
+
+Unexpected errors before any RHC trade broadcast do not permanently open the
+circuit.
+
+## Clearing the circuit
+
+Never clear the circuit until the listed transaction hashes and balances have
+been reconciled on both chains.
+
+Inspect / clear with:
+
+```bash
+npm run circuit:clear
+```
+
+That command is read-only unless explicitly confirmed.
+
+After reconciliation:
+
+```bash
+npm run circuit:clear -- --confirm
+```
+
+This clears the durable breaker and unresolved attempt record. The clear action
+is appended to the execution journal.
+
+## Transaction order
+
+The proven route remains:
+
+```text
+BUY Ethereum WETH → WABIT
+SELL RHC WABIT → WETH
+```
+
+Execution remains deliberately ordered:
+
+```text
+1. RHC protected WABIT sell
+2. Ethereum protected WABIT buy / inventory hedge
+```
+
+The capacity-sensitive RHC leg goes first. If it fails, Ethereum remains
+untouched. Once it succeeds, the Ethereum hedge is mandatory.
+
+Reverse-direction live execution remains disabled until separately proven.
+
+## Protection
+
+The live path still uses:
+
+```text
+fresh direct chain state
+exact static calls
+exact estimateGas()
+fresh gas prices
+25% gas-limit padding
+automatic symmetric per-leg protection
+50% fresh modeled-net retention policy
+```
+
+No manual gas-unit profile is required by the live execution gate.
+
+## Ctrl+C behavior
+
+Before the first RHC swap broadcast:
+
+```text
+Ctrl+C → abort safely
+```
+
+After RHC broadcast:
+
+```text
+Ctrl+C → stop request remembered
+       → mandatory Ethereum hedge still attempted
+       → exit afterward
+```
+
+## Runtime safety
+
+Do not commit `.env`.
+
+The live signer still requires both gates:
+
+```env
+MODE=live
+ENABLE_EXECUTION=true
+```
+
+and:
+
+```env
+EXECUTOR_ADDRESS=
+EXECUTOR_PRIVATE_KEY=
+```
+
+For no-money monitoring / development:
+
+```env
+MODE=paper
+ENABLE_EXECUTION=false
+```
+
+## Commands
+
+```bash
+npm run check
+npm run scan
+npm run simulate
+npm run watch
+npm run circuit:clear
+```
+
+`npm run watch` is the only watcher command. The selected `.env` mode determines
+whether it runs the cold paper pipeline or the autonomous live hot path.

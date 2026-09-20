@@ -4,10 +4,12 @@ import {
 } from "ethers";
 
 import type {
+  EthereumVerification,
   IndependentVerification,
   MarketObservation,
   OpportunityCandidate,
   OpportunitySweep,
+  RhcVerification,
 } from "./types.js";
 import type {
   PhaseOneAssessment,
@@ -94,26 +96,62 @@ function shortDirection(
     : "RHC→ETH";
 }
 
-export function renderObservation(
-  observation: MarketObservation,
-  assessment: PhaseOneAssessment,
-): string {
-  const ageSeconds = Math.max(
-    0,
-    observation.ageMs / 1000,
-  );
+export interface ObservationRenderOptions {
+  searcherMode?:
+    "PAPER" | "LIVE";
 
-  return [
+  marketSource?:
+    "PUBLIC_FEED" | "DIRECT_RPC";
+
+  publicFeedStatus?:
+    string;
+}
+
+export function renderObservation(
+  observation:
+    MarketObservation,
+  assessment:
+    PhaseOneAssessment,
+  options:
+    ObservationRenderOptions = {},
+): string {
+  const ageSeconds =
+    Math.max(
+      0,
+      observation.ageMs / 1000,
+    );
+
+  const searcherMode =
+    options.searcherMode ??
+    "PAPER";
+
+  const marketSource =
+    options.marketSource ??
+    "PUBLIC_FEED";
+
+  const lines = [
     "",
     "DaWabLauncher Reference Searcher",
     "────────────────────────────────",
-    "Mode:            PAPER",
+    `Searcher mode:   ${searcherMode}`,
+    `Market source:   ${marketSource}`,
+  ];
+
+  if (
+    options.publicFeedStatus
+  ) {
+    lines.push(
+      `Public feed:     ${options.publicFeedStatus}`,
+    );
+  }
+
+  lines.push(
     `Snapshot age:    ${ageSeconds.toFixed(1)}s`,
     `RHC block:       ${observation.rhcBlock}`,
     `Ethereum block:  ${observation.ethereumBlock}`,
     `RHC venue:       ${observation.rhcVenue}`,
     "",
-    "Same-notional public comparison",
+    "Same-notional market comparison",
     `Input:           ${observation.notionalWeth} WETH`,
     "",
     `Ethereum:        ${formatBillions(
@@ -131,9 +169,11 @@ export function renderObservation(
     )}`,
     `Venue signal:       ${observation.venueSignal}`,
     "",
-    `Public-feed decision: ${assessment.decision}`,
+    `Strategy decision:  ${assessment.decision}`,
     "",
-  ].join("\n");
+  );
+
+  return lines.join("\n");
 }
 
 export function renderVerification(
@@ -174,6 +214,52 @@ export function renderVerification(
     "",
     `Feed verification: ${verification.status}`,
     `Execution basis:   ${verification.executionBasis}`,
+    "",
+  ].join("\n");
+}
+
+
+export function renderLiveDirectVerification(
+  ethereum:
+    EthereumVerification,
+  rhc:
+    RhcVerification,
+  feedCrossCheck:
+    IndependentVerification | null,
+  feedMessage:
+    string | null,
+): string {
+  const feedStatus =
+    feedCrossCheck
+      ? feedCrossCheck.status ===
+        "PASS"
+        ? "PASS"
+        : "MISMATCH (advisory)"
+      : `UNAVAILABLE (advisory)${
+          feedMessage
+            ? ` — ${feedMessage}`
+            : ""
+        }`;
+
+  return [
+    "Live direct RPC verification",
+    "────────────────────────────",
+    `Ethereum chain:   ${ethereum.chainId.toString()} @ block ${ethereum.blockNumber}`,
+    `ETH pair factory: ${pass(
+      ethereum.canonicalUniswapV2Factory,
+    )} (canonical Uniswap V2)`,
+    `ETH RPC output:   ${formatRawWabitBillions(
+      ethereum.netWabitOutRaw,
+    )} WABIT`,
+    "",
+    `RHC chain:        ${rhc.chainId.toString()} @ block ${rhc.blockNumber}`,
+    `RHC venue:        ${rhc.venueName}`,
+    `RHC RPC output:   ${formatRawWabitBillions(
+      rhc.amountOutWabitRaw,
+    )} WABIT`,
+    "",
+    "Execution basis:  DIRECT_RPC_MARKET_STATE",
+    `Public feed xchk: ${feedStatus}`,
     "",
   ].join("\n");
 }
@@ -285,7 +371,12 @@ function renderBest(
 }
 
 export function renderOpportunitySweep(
-  sweep: OpportunitySweep,
+  sweep:
+    OpportunitySweep,
+  options: {
+    executionMode?:
+      "paper" | "live";
+  } = {},
 ): string {
   const capacity =
     sweep.rhcCurve.maxExecutableSellRaw;
@@ -358,27 +449,45 @@ export function renderOpportunitySweep(
     ),
   );
 
-  if (sweep.gasModelConfigured) {
+  if (
+    options.executionMode ===
+    "live"
+  ) {
     lines.push(
-      renderBest(
-        "Best net",
-        sweep.bestNet,
-        true,
-      ),
+      "Best net: calculated later from exact live estimateGas + protected preflight",
+    );
+
+    lines.push("");
+    lines.push(
+      "Execution status: HOT_PREFLIGHT_REQUIRED",
+    );
+    lines.push(
+      "Positive gross P&L is only a candidate; direct live revalidation, exact gas, protection, and static-call checks remain mandatory.",
     );
   } else {
+    if (sweep.gasModelConfigured) {
+      lines.push(
+        renderBest(
+          "Best net",
+          sweep.bestNet,
+          true,
+        ),
+      );
+    } else {
+      lines.push(
+        "Best net: deferred to the cold execution model; no manual gas-unit profile is configured",
+      );
+    }
+
+    lines.push("");
     lines.push(
-      "Best net: unavailable — gas-unit profile not configured",
+      `Execution status: ${sweep.executionStatus}`,
+    );
+    lines.push(
+      "Positive gross P&L is an economic signal; the cold fork simulation remains the paper execution gate.",
     );
   }
 
-  lines.push("");
-  lines.push(
-    `Execution status: ${sweep.executionStatus}`,
-  );
-  lines.push(
-    "Positive gross P&L is an economic signal; Phase 4 transaction simulation remains the execution gate.",
-  );
   lines.push("");
 
   return lines.join("\n");

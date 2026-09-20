@@ -18,10 +18,6 @@ import {
 } from "../contracts.js";
 
 import {
-  fetchDaWabState,
-} from "../market/dawablauncher.js";
-
-import {
   modelEthereumBuy,
   verifyEthereumBuy,
 } from "../market/ethereum.js";
@@ -35,10 +31,6 @@ import {
 import type {
   OpportunityCandidate,
 } from "../types.js";
-
-import {
-  verifyAgainstFeed,
-} from "../verification.js";
 
 import {
   deriveAutomaticProtection,
@@ -136,12 +128,44 @@ export interface HotExecutionResult {
     boolean;
 }
 
+export type HotExecutionLifecycleEvent =
+  | {
+      type:
+        "RHC_SELL_BROADCAST";
+      txHash:
+        string;
+    }
+  | {
+      type:
+        "RHC_SELL_MINED";
+      txHash:
+        string;
+    }
+  | {
+      type:
+        "ETH_HEDGE_BROADCAST";
+      txHash:
+        string;
+    }
+  | {
+      type:
+        "ETH_HEDGE_MINED";
+      txHash:
+        string;
+    };
+
 export interface HotExecutorControl {
   shouldAbort:
     () => boolean;
 
   log?:
     (message: string) => void;
+
+  onLifecycle?:
+    (
+      event:
+        HotExecutionLifecycleEvent,
+    ) => Promise<void> | void;
 }
 
 interface Providers {
@@ -235,6 +259,39 @@ function log(
   control.log?.(
     `[HOT] ${message}`,
   );
+}
+
+async function notifyLifecycle(
+  control:
+    HotExecutorControl,
+  event:
+    HotExecutionLifecycleEvent,
+): Promise<void> {
+  if (
+    !control.onLifecycle
+  ) {
+    return;
+  }
+
+  try {
+    await control.onLifecycle(
+      event,
+    );
+  } catch (error: unknown) {
+    /*
+     * Once a transaction has been broadcast, journaling must never interrupt
+     * the mandatory hedge path. The persistent PREPARING record still forces
+     * a conservative circuit-open on restart if this write failed.
+     */
+    log(
+      control,
+      `WARNING: execution journal lifecycle write failed (${event.type}): ${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`,
+    );
+  }
 }
 
 function abortIfRequested(
@@ -551,9 +608,11 @@ async function readFreshRoute(
   candidate:
     OpportunityCandidate,
 ): Promise<FreshRoute> {
-  const state =
-    await fetchDaWabState();
-
+  /*
+   * Live execution is deliberately independent of the public state.json feed.
+   * The website feed remains useful for discovery/corroboration in the watcher,
+   * but direct chain RPC state is the execution authority.
+   */
   const [
     ethereum,
     rhc,
@@ -565,19 +624,12 @@ async function readFreshRoute(
       getRhcCurveState(),
     ]);
 
-  const verification =
-    verifyAgainstFeed(
-      state,
-      ethereum,
-      rhc,
-    );
-
   if (
-    verification.status !==
-    "PASS"
+    !ethereum
+      .canonicalUniswapV2Factory
   ) {
     throw new Error(
-      "Fresh independent market verification failed.",
+      "Ethereum WABIT/WETH pair no longer reports the canonical Uniswap V2 factory.",
     );
   }
 
@@ -1588,6 +1640,16 @@ async function executeRhcSell(
     `RHC sell BROADCAST: ${tx.hash}`,
   );
 
+  await notifyLifecycle(
+    control,
+    {
+      type:
+        "RHC_SELL_BROADCAST",
+      txHash:
+        tx.hash,
+    },
+  );
+
   const result =
     await receiptResult(
       "RHC",
@@ -1614,6 +1676,16 @@ async function executeRhcSell(
       "RHC sell mined below protected recipient WETH minimum.",
     );
   }
+
+  await notifyLifecycle(
+    control,
+    {
+      type:
+        "RHC_SELL_MINED",
+      txHash:
+        result.txHash,
+    },
+  );
 
   log(
     control,
@@ -1741,6 +1813,16 @@ async function executeEthereumHedge(
     `Ethereum hedge BROADCAST: ${tx.hash}`,
   );
 
+  await notifyLifecycle(
+    control,
+    {
+      type:
+        "ETH_HEDGE_BROADCAST",
+      txHash:
+        tx.hash,
+    },
+  );
+
   const result =
     await receiptResult(
       "Ethereum",
@@ -1767,6 +1849,16 @@ async function executeEthereumHedge(
       "Ethereum hedge mined below the protected WABIT minimum.",
     );
   }
+
+  await notifyLifecycle(
+    control,
+    {
+      type:
+        "ETH_HEDGE_MINED",
+      txHash:
+        result.txHash,
+    },
+  );
 
   log(
     control,
