@@ -299,7 +299,7 @@ async function evaluateProtectionPoint(
   };
 }
 
-async function deriveAutomaticProtection(
+export async function deriveAutomaticProtection(
   expectedEthereumWabitRaw: bigint,
   inputWethRaw: bigint,
   gasCostWethRaw: bigint,
@@ -987,7 +987,7 @@ export function renderPaperExecutionGate(
 ): string {
   const lines = [
     "",
-    "Phase 5D autonomous bootstrap-ready paper gate",
+    "Phase 5 cold-validation paper gate",
     "────────────────────────────────────────",
     `Fresh verification:     ${gate.verificationStatus}`,
     `Ethereum block:         ${gate.ethereumBlock}`,

@@ -31,12 +31,11 @@ import {
   renderPaperExecutionGate,
 } from "../execution/paperGate.js";
 import {
-  executeLiveOpportunity,
-  gateCanReachLiveExecution,
-} from "../execution/liveExecutor.js";
+  executeHotOpportunity,
+} from "../execution/hotExecutor.js";
 import type {
-  LiveExecutionResult,
-} from "../execution/liveExecutor.js";
+  HotExecutionResult,
+} from "../execution/hotExecutor.js";
 import type {
   IndependentVerification,
   OpportunitySweep,
@@ -70,7 +69,7 @@ let lastSweepAt = 0;
 let lastPaperGateAt = 0;
 
 let lastLiveExecution:
-  | LiveExecutionResult
+  | HotExecutionResult
   | null = null;
 
 let executionCircuitOpen =
@@ -120,9 +119,16 @@ async function runOnce(): Promise<void> {
 
   const now = Date.now();
   const verificationDue =
-    !lastVerification ||
-    now - lastVerifiedAt >=
-      config.verificationIntervalMs;
+    config.liveExecution
+      ? (
+          !liveExecutionAttempted &&
+          !executionCircuitOpen
+        )
+      : (
+          !lastVerification ||
+          now - lastVerifiedAt >=
+            config.verificationIntervalMs
+        );
 
   if (verificationDue) {
     lastVerification =
@@ -167,47 +173,72 @@ async function runOnce(): Promise<void> {
             "SKIP — best opportunity is RHC→ETH, but that execution route has not yet passed Phase 4 fork validation.";
         } else {
           try {
-            const simulation =
-              await simulateBestOpportunity(
-                lastSweep,
-              );
-
-            lastPaperGate =
-              await evaluatePaperExecutionGate(
-                simulation,
-              );
-
-            lastPaperGateAt =
-              Date.now();
-
             if (
-              config.liveExecution &&
-              !executionCircuitOpen &&
-              !liveExecutionAttempted &&
-              gateCanReachLiveExecution(
-                lastPaperGate,
-              )
+              config.liveExecution
             ) {
               /*
-               * Consume the one-shot latch before entering the live executor.
-               * Even an aborted attempt requires an explicit process restart.
+               * LIVE HOT PATH
+               *
+               * No Anvil.
+               * No Forge.
+               * No Phase 5D fork bootstrap simulation.
+               *
+               * The route has already been cold-proven. The live executor
+               * revalidates current chain state, estimates the exact calls,
+               * maintains the wallet, derives protection, and broadcasts only
+               * if every hot-path gate still passes.
                */
-              liveExecutionAttempted =
-                true;
+              if (
+                !executionCircuitOpen &&
+                !liveExecutionAttempted &&
+                !stopping
+              ) {
+                liveExecutionAttempted =
+                  true;
 
-              lastLiveExecution =
-                await executeLiveOpportunity(
-                  simulation,
-                  lastPaperGate,
+                lastLiveExecution =
+                  await executeHotOpportunity(
+                    candidate,
+                    {
+                      shouldAbort:
+                        () =>
+                          stopping,
+
+                      log:
+                        (message) =>
+                          console.log(
+                            message,
+                          ),
+                    },
+                  );
+
+                if (
+                  lastLiveExecution
+                    .openedCircuitBreaker
+                ) {
+                  executionCircuitOpen =
+                    true;
+                }
+              }
+            } else {
+              /*
+               * PAPER / COLD VALIDATION PATH
+               *
+               * Preserve the expensive fork proof here for development and
+               * manual validation. It is intentionally absent from live mode.
+               */
+              const simulation =
+                await simulateBestOpportunity(
+                  lastSweep,
                 );
 
-              if (
-                lastLiveExecution
-                  .openedCircuitBreaker
-              ) {
-                executionCircuitOpen =
-                  true;
-              }
+              lastPaperGate =
+                await evaluatePaperExecutionGate(
+                  simulation,
+                );
+
+              lastPaperGateAt =
+                Date.now();
             }
           } catch (error: unknown) {
             lastPaperGateError =
@@ -306,69 +337,7 @@ async function runOnce(): Promise<void> {
         )}s`,
       );
 
-      if (
-        lastLiveExecution
-      ) {
-        console.log("");
-        console.log(
-          "Phase 5E integrated live executor",
-        );
-        console.log(
-          "────────────────────────────────",
-        );
-        console.log(
-          `Status:                 ${lastLiveExecution.status}`,
-        );
-        console.log(
-          `Wallet:                 ${lastLiveExecution.wallet}`,
-        );
-        console.log(
-          `Reason:                 ${lastLiveExecution.reason}`,
-        );
 
-        for (
-          const tx of
-          lastLiveExecution.bootstrap.transactions
-        ) {
-          console.log(
-            `${tx.chain} ${tx.action}: ${tx.txHash}`,
-          );
-        }
-
-        if (
-          lastLiveExecution.rhcSell
-        ) {
-          console.log(
-            `RHC sell tx:            ${lastLiveExecution.rhcSell.txHash}`,
-          );
-        }
-
-        if (
-          lastLiveExecution.ethereumBuy
-        ) {
-          console.log(
-            `Ethereum buy tx:        ${lastLiveExecution.ethereumBuy.txHash}`,
-          );
-        }
-
-        if (
-          lastLiveExecution
-            .realizedNetWethRaw !=
-          null
-        ) {
-          console.log(
-            `Realized net raw:       ${lastLiveExecution.realizedNetWethRaw.toString()} wei-WETH`,
-          );
-        }
-
-        console.log(
-          `Circuit breaker:        ${executionCircuitOpen ? "OPEN" : "CLOSED"}`,
-        );
-
-        console.log(
-          `Live one-shot latch:    ${liveExecutionAttempted ? "CONSUMED" : "ARMED"}`,
-        );
-      }
     } else if (
       lastPaperGateError
     ) {
@@ -396,6 +365,94 @@ async function runOnce(): Promise<void> {
     );
   }
 
+  if (
+    config.liveExecution
+  ) {
+    console.log("");
+    console.log(
+      "Phase 5E.2 hot live executor",
+    );
+    console.log(
+      "────────────────────────────",
+    );
+
+    if (
+      lastLiveExecution
+    ) {
+      console.log(
+        `Status:                 ${lastLiveExecution.status}`,
+      );
+      console.log(
+        `Wallet:                 ${lastLiveExecution.wallet}`,
+      );
+      console.log(
+        `Reason:                 ${lastLiveExecution.reason}`,
+      );
+
+      for (
+        const tx of
+        lastLiveExecution
+          .bootstrapTransactions
+      ) {
+        console.log(
+          `${tx.chain} ${tx.action}: ${tx.txHash}`,
+        );
+      }
+
+      if (
+        lastLiveExecution.rhcSell
+      ) {
+        console.log(
+          `RHC sell tx:            ${lastLiveExecution.rhcSell.txHash}`,
+        );
+      }
+
+      if (
+        lastLiveExecution
+          .ethereumBuy
+      ) {
+        console.log(
+          `Ethereum hedge tx:      ${lastLiveExecution.ethereumBuy.txHash}`,
+        );
+      }
+
+      if (
+        lastLiveExecution
+          .protection
+      ) {
+        console.log(
+          `Protected slippage:     ${lastLiveExecution.protection.maxSymmetricSlippageBps} bps / leg`,
+        );
+      }
+
+      if (
+        lastLiveExecution
+          .realizedNetWethRaw !=
+        null
+      ) {
+        console.log(
+          `Realized net raw:       ${lastLiveExecution.realizedNetWethRaw.toString()} wei-WETH`,
+        );
+      }
+    } else {
+      console.log(
+        "Status:                 ARMED — waiting for first qualifying opportunity",
+      );
+    }
+
+    console.log(
+      `Circuit breaker:        ${executionCircuitOpen ? "OPEN" : "CLOSED"}`,
+    );
+
+    console.log(
+      `Live one-shot latch:    ${liveExecutionAttempted ? "CONSUMED" : "ARMED"}`,
+    );
+
+    console.log(
+      `Operator stop:          ${stopping ? "REQUESTED" : "not requested"}`,
+    );
+  }
+
   console.log(
     `Public feed: every ${(
       config.pollIntervalMs / 1000
@@ -410,7 +467,9 @@ async function runOnce(): Promise<void> {
   );
 
   console.log(
-    "Ctrl+C to stop.",
+    config.liveExecution
+      ? "Ctrl+C: abort before first swap; after RHC broadcast, finish hedge then stop."
+      : "Ctrl+C to stop.",
   );
 }
 
